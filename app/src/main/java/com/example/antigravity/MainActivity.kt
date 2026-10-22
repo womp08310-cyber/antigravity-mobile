@@ -19,6 +19,7 @@ import androidx.activity.OnBackPressedCallback
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.example.antigravity.server.LocalServer
+import java.io.ByteArrayInputStream
 
 class MainActivity : ComponentActivity() {
     companion object {
@@ -34,7 +35,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Initialize local loopback server first
+        // Initialize local server for RPCs
         localServer = LocalServer(this)
         localServer.start()
 
@@ -45,6 +46,7 @@ class MainActivity : ComponentActivity() {
         }
 
         // Setup WebView
+        WebView.setWebContentsDebuggingEnabled(true)
         webView = WebView(this).apply {
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -66,6 +68,43 @@ class MainActivity : ComponentActivity() {
             addJavascriptInterface(webAppInterface, "AndroidBridge")
 
             webViewClient = object : WebViewClient() {
+                // Intercept static assets to guarantee instant, 100% reliable zero-copy loading without TCP socket issues
+                override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
+                    val url = request?.url ?: return null
+                    val path = url.path ?: ""
+
+                    try {
+                        when {
+                            path == "/" || path == "/index.html" -> {
+                                return WebResourceResponse("text/html", "UTF-8", assets.open("web/index.html"))
+                            }
+                            path == "/main.js" -> {
+                                return WebResourceResponse("application/javascript", "UTF-8", assets.open("web/main.js"))
+                            }
+                            path == "/jetbox.css" -> {
+                                return WebResourceResponse("text/css", "UTF-8", assets.open("web/jetbox.css"))
+                            }
+                            path == "/compiled_tailwind.css" -> {
+                                return WebResourceResponse("text/css", "UTF-8", assets.open("web/compiled_tailwind.css"))
+                            }
+                            path == "/prism_bundle.js" -> {
+                                return WebResourceResponse("application/javascript", "UTF-8", assets.open("web/prism_bundle.js"))
+                            }
+                            path == "/audio_processor.js" -> {
+                                return WebResourceResponse("application/javascript", "UTF-8", assets.open("web/audio_processor.js"))
+                            }
+                            path == "/favicon.ico" -> {
+                                return WebResourceResponse("image/x-icon", "UTF-8", ByteArrayInputStream(ByteArray(0)))
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error intercepting asset $path", e)
+                    }
+
+                    // RPC calls and others pass through to LocalServer or network
+                    return super.shouldInterceptRequest(view, request)
+                }
+
                 override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                     val url = request?.url?.toString() ?: return false
                     if (url.startsWith("http://127.0.0.1:") || url.startsWith("http://localhost:")) {
@@ -75,11 +114,16 @@ class MainActivity : ComponentActivity() {
                     startActivity(intent)
                     return true
                 }
+
+                override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
+                    super.onReceivedError(view, request, error)
+                    Log.e(TAG, "WebView error on ${request?.url}: ${error?.description}")
+                }
             }
 
             webChromeClient = object : WebChromeClient() {
                 override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
-                    Log.d("WebConsole", "[${consoleMessage?.messageLevel()}] ${consoleMessage?.message()} -- line ${consoleMessage?.lineNumber()}")
+                    Log.i("WebConsole", "[${consoleMessage?.messageLevel()}] ${consoleMessage?.message()} (${consoleMessage?.sourceId()}:${consoleMessage?.lineNumber()})")
                     return true
                 }
             }

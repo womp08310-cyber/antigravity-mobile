@@ -77,6 +77,7 @@ class LocalServer(private val context: Context) {
                 val method = parts[0]
                 val pathAndQuery = parts[1]
                 val path = pathAndQuery.substringBefore("?")
+                Log.i(TAG, "HTTP REQ: $method $path")
 
                 // Read headers
                 val headers = mutableMapOf<String, String>()
@@ -94,44 +95,6 @@ class LocalServer(private val context: Context) {
                     return
                 }
 
-                // Route static assets
-                if (method.equals("GET", ignoreCase = true)) {
-                    when {
-                        path == "/" || path == "/index.html" -> {
-                            serveAsset(output, "web/index.html", "text/html; charset=utf-8")
-                            return
-                        }
-                        path == "/main.js" -> {
-                            serveAsset(output, "web/main.js", "application/javascript; charset=utf-8")
-                            return
-                        }
-                        path == "/jetbox.css" -> {
-                            serveAsset(output, "web/jetbox.css", "text/css; charset=utf-8")
-                            return
-                        }
-                        path == "/compiled_tailwind.css" -> {
-                            serveAsset(output, "web/compiled_tailwind.css", "text/css; charset=utf-8")
-                            return
-                        }
-                        path == "/prism_bundle.js" -> {
-                            serveAsset(output, "web/prism_bundle.js", "application/javascript; charset=utf-8")
-                            return
-                        }
-                        path == "/favicon.ico" -> {
-                            sendResponse(output, 204, "No Content", "image/x-icon", ByteArray(0))
-                            return
-                        }
-                        path.startsWith("/assets/") || path.startsWith("/static/") -> {
-                            val assetSubPath = "web" + path
-                            if (assetExists(assetSubPath)) {
-                                val mime = guessMimeType(path)
-                                serveAsset(output, assetSubPath, mime)
-                                return
-                            }
-                        }
-                    }
-                }
-
                 // Read body for POST requests
                 val contentLength = headers["content-length"]?.toIntOrNull() ?: 0
                 val bodyBytes = if (contentLength > 0) {
@@ -145,19 +108,25 @@ class LocalServer(private val context: Context) {
                     bytes
                 } else ByteArray(0)
 
-                val bodyStr = String(bodyBytes, StandardCharsets.UTF_8)
-
                 // Handle RPC requests
                 if (path.startsWith("/exa.language_server_pb.LanguageServerService/")) {
                     val rpcMethod = path.substringAfterLast("/")
-                    handleRpcMethod(output, rpcMethod, bodyStr)
+                    val clientContentType = headers["content-type"] ?: ""
+                    handleRpcMethod(output, rpcMethod, bodyBytes, clientContentType)
                     return
                 }
 
-                // Default fallback for SPA (client-side routing)
-                if (method.equals("GET", ignoreCase = true) && !path.contains(".")) {
-                    serveAsset(output, "web/index.html", "text/html; charset=utf-8")
-                    return
+                // Route static assets fallback
+                if (method.equals("GET", ignoreCase = true)) {
+                    val assetSubPath = if (path == "/" || path == "/index.html") "web/index.html" else "web" + path
+                    if (assetExists(assetSubPath)) {
+                        serveAsset(output, assetSubPath, guessMimeType(assetSubPath))
+                        return
+                    }
+                    if (!path.contains(".")) {
+                        serveAsset(output, "web/index.html", "text/html; charset=utf-8")
+                        return
+                    }
                 }
 
                 sendResponse(output, 404, "Not Found", "text/plain", "Not Found".toByteArray())
@@ -167,9 +136,11 @@ class LocalServer(private val context: Context) {
         }
     }
 
-    private fun handleRpcMethod(output: OutputStream, method: String, bodyStr: String) {
+    private fun handleRpcMethod(output: OutputStream, method: String, bodyBytes: ByteArray, clientContentType: String) {
         try {
-            val reqJson = if (bodyStr.isNotEmpty()) JSONObject(bodyStr) else JSONObject()
+            Log.i(TAG, "RPC CALL: $method (contentType=$clientContentType, bodyLen=${bodyBytes.size})")
+            // Extract JSON safely regardless of Connect envelope prefix
+            val reqJson = parseJsonFromBytes(bodyBytes)
             val respJson = JSONObject()
 
             when (method) {
@@ -189,6 +160,19 @@ class LocalServer(private val context: Context) {
                 "GetLocalUserInfo" -> {
                     respJson.put("username", "mobile_developer")
                     respJson.put("homeDirUri", "file://${Environment.getExternalStorageDirectory().absolutePath}")
+                }
+
+                "GetMendelFlags" -> {
+                    respJson.put("experimentConfig", JSONObject().put("experiments", JSONArray()))
+                    respJson.put("webrtcMeshReady", true)
+                }
+
+                "JetboxSubscribeToState", "JetboxSubscribeToSummaries" -> {
+                    // Empty state response
+                }
+
+                "SubscribeToSidecars" -> {
+                    respJson.put("sidecars", JSONArray())
                 }
 
                 "GetUserStatus" -> {
@@ -267,13 +251,40 @@ class LocalServer(private val context: Context) {
                 }
 
                 "ListProjects" -> {
-                    respJson.put("projectIds", JSONArray().apply {
-                        put("default-mobile-project")
-                    })
+                    respJson.put("projectIds", JSONArray())
                 }
 
                 "ReadProjects" -> {
-                    // Empty 200
+                    respJson.put("projects", JSONArray())
+                    respJson.put("notFoundIds", JSONArray())
+                }
+
+                "ReadProject" -> {
+                    respJson.put("project", JSONObject())
+                }
+
+                "ListLicenses" -> {
+                    respJson.put("licenses", JSONArray())
+                }
+
+                "ListTriggers" -> {
+                    respJson.put("triggers", JSONArray())
+                }
+
+                "ListTriggerOptions" -> {
+                    respJson.put("options", JSONArray())
+                }
+
+                "ProjectUpdatesStream" -> {
+                    respJson.put("updates", JSONArray())
+                }
+
+                "GetRepoInfos" -> {
+                    respJson.put("repoInfos", JSONArray())
+                }
+
+                "GetDebugDiagnostics" -> {
+                    respJson.put("diagnostics", JSONArray())
                 }
 
                 "GetGrantedScopes" -> {
@@ -314,8 +325,7 @@ class LocalServer(private val context: Context) {
                 }
 
                 "GetAllCascadeTrajectories" -> {
-                    val summaries = JSONObject()
-                    respJson.put("trajectorySummaries", summaries)
+                    respJson.put("trajectorySummaries", JSONObject())
                 }
 
                 "ReadFile" -> {
@@ -360,12 +370,26 @@ class LocalServer(private val context: Context) {
                 }
 
                 else -> {
-                    Log.d(TAG, "Unhandled RPC method: $method")
+                    Log.i(TAG, "Unhandled RPC method: $method -> returning empty JSONObject")
                 }
             }
 
-            val respBytes = respJson.toString().toByteArray(StandardCharsets.UTF_8)
-            sendResponse(output, 200, "OK", "application/json", respBytes, true)
+            val rawJsonBytes = respJson.toString().toByteArray(StandardCharsets.UTF_8)
+            Log.i(TAG, "RPC RESP: $method -> ${respJson.toString().take(100)}")
+
+            when {
+                clientContentType.contains("grpc-web") -> {
+                    val framed = frameGrpcWeb(rawJsonBytes)
+                    sendResponse(output, 200, "OK", clientContentType, framed, true, isGrpc = true)
+                }
+                clientContentType.contains("connect") -> {
+                    val framed = frameConnect(rawJsonBytes)
+                    sendResponse(output, 200, "OK", clientContentType, framed, true)
+                }
+                else -> {
+                    sendResponse(output, 200, "OK", "application/json", rawJsonBytes, true)
+                }
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Error handling RPC $method", e)
             val errJson = JSONObject().apply {
@@ -373,8 +397,82 @@ class LocalServer(private val context: Context) {
                 put("message", e.message ?: "Internal error")
             }
             val errBytes = errJson.toString().toByteArray(StandardCharsets.UTF_8)
-            sendResponse(output, 500, "Internal Server Error", "application/json", errBytes, true)
+            if (clientContentType.contains("grpc-web")) {
+                val framed = frameGrpcWeb(errBytes)
+                sendResponse(output, 200, "OK", clientContentType, framed, true, isGrpc = true)
+            } else {
+                sendResponse(output, 500, "Internal Server Error", "application/json", errBytes, true)
+            }
         }
+    }
+
+    private fun frameGrpcWeb(jsonBytes: ByteArray): ByteArray {
+        val len = jsonBytes.size
+        val dataFrame = ByteArray(5 + len)
+        dataFrame[0] = 0 // Flags: 0 = data
+        dataFrame[1] = ((len shr 24) and 0xFF).toByte()
+        dataFrame[2] = ((len shr 16) and 0xFF).toByte()
+        dataFrame[3] = ((len shr 8) and 0xFF).toByte()
+        dataFrame[4] = (len and 0xFF).toByte()
+        System.arraycopy(jsonBytes, 0, dataFrame, 5, len)
+
+        val trailer = "grpc-status: 0\r\ngrpc-message: OK\r\n".toByteArray(StandardCharsets.UTF_8)
+        val tLen = trailer.size
+        val trailerFrame = ByteArray(5 + tLen)
+        trailerFrame[0] = 0x80.toByte() // Flags: 0x80 = 128 = Trailers
+        trailerFrame[1] = ((tLen shr 24) and 0xFF).toByte()
+        trailerFrame[2] = ((tLen shr 16) and 0xFF).toByte()
+        trailerFrame[3] = ((tLen shr 8) and 0xFF).toByte()
+        trailerFrame[4] = (tLen and 0xFF).toByte()
+        System.arraycopy(trailer, 0, trailerFrame, 5, tLen)
+
+        return dataFrame + trailerFrame
+    }
+
+    private fun parseJsonFromBytes(bytes: ByteArray): JSONObject {
+        if (bytes.isEmpty()) return JSONObject()
+        return try {
+            val content = if (bytes.size > 5 && bytes[0] == 0.toByte()) {
+                val len = ((bytes[1].toInt() and 0xFF) shl 24) or
+                          ((bytes[2].toInt() and 0xFF) shl 16) or
+                          ((bytes[3].toInt() and 0xFF) shl 8) or
+                          (bytes[4].toInt() and 0xFF)
+                if (len in 1..(bytes.size - 5)) {
+                    String(bytes, 5, len, StandardCharsets.UTF_8)
+                } else {
+                    String(bytes, StandardCharsets.UTF_8)
+                }
+            } else {
+                String(bytes, StandardCharsets.UTF_8)
+            }.trim()
+
+            if (content.startsWith("{")) JSONObject(content) else JSONObject()
+        } catch (_: Exception) {
+            JSONObject()
+        }
+    }
+
+    private fun frameConnect(jsonBytes: ByteArray): ByteArray {
+        val len = jsonBytes.size
+        val dataFrame = ByteArray(5 + len)
+        dataFrame[0] = 0 // Flags: 0 = data
+        dataFrame[1] = ((len shr 24) and 0xFF).toByte()
+        dataFrame[2] = ((len shr 16) and 0xFF).toByte()
+        dataFrame[3] = ((len shr 8) and 0xFF).toByte()
+        dataFrame[4] = (len and 0xFF).toByte()
+        System.arraycopy(jsonBytes, 0, dataFrame, 5, len)
+
+        val trailer = "{}".toByteArray(StandardCharsets.UTF_8)
+        val tLen = trailer.size
+        val trailerFrame = ByteArray(5 + tLen)
+        trailerFrame[0] = 2 // Flags: 2 = End of Stream (trailers)
+        trailerFrame[1] = ((tLen shr 24) and 0xFF).toByte()
+        trailerFrame[2] = ((tLen shr 16) and 0xFF).toByte()
+        trailerFrame[3] = ((tLen shr 8) and 0xFF).toByte()
+        trailerFrame[4] = (tLen and 0xFF).toByte()
+        System.arraycopy(trailer, 0, trailerFrame, 5, tLen)
+
+        return dataFrame + trailerFrame
     }
 
     data class CommandResult(val output: String, val exitCode: Int)
@@ -452,20 +550,22 @@ class LocalServer(private val context: Context) {
 
     private fun serveAsset(output: OutputStream, assetPath: String, mimeType: String) {
         try {
-            val bytes = context.assets.open(assetPath).use { it.readBytes() }
+            val stream = context.assets.open(assetPath)
             val header = buildString {
                 append("HTTP/1.1 200 OK\r\n")
                 append("Content-Type: $mimeType\r\n")
-                append("Content-Length: ${bytes.size}\r\n")
                 append("Access-Control-Allow-Origin: *\r\n")
                 append("Cache-Control: no-cache\r\n")
                 append("Connection: close\r\n\r\n")
             }
             output.write(header.toByteArray(StandardCharsets.UTF_8))
-            output.write(bytes)
+            val buf = ByteArray(16384)
+            var n: Int
+            while (stream.read(buf).also { n = it } != -1) {
+                output.write(buf, 0, n)
+            }
             output.flush()
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to load asset $assetPath", e)
             sendResponse(output, 500, "Internal Error", "text/plain", "Failed to load asset".toByteArray())
         }
     }
@@ -476,16 +576,22 @@ class LocalServer(private val context: Context) {
         statusText: String,
         contentType: String,
         body: ByteArray,
-        cors: Boolean = false
+        cors: Boolean = false,
+        isGrpc: Boolean = false
     ) {
         val header = buildString {
             append("HTTP/1.1 $statusCode $statusText\r\n")
             append("Content-Type: $contentType\r\n")
             append("Content-Length: ${body.size}\r\n")
+            if (isGrpc) {
+                append("grpc-status: 0\r\n")
+                append("grpc-message: OK\r\n")
+            }
             if (cors) {
                 append("Access-Control-Allow-Origin: *\r\n")
                 append("Access-Control-Allow-Methods: GET, POST, OPTIONS, PUT, DELETE\r\n")
-                append("Access-Control-Allow-Headers: Content-Type, x-codeium-csrf-token, Authorization\r\n")
+                append("Access-Control-Allow-Headers: Content-Type, x-codeium-csrf-token, Authorization, connect-protocol-version, connect-timeout-ms, x-grpc-web, x-user-agent\r\n")
+                append("Access-Control-Expose-Headers: Content-Type, grpc-status, grpc-message, grpc-status-details-bin\r\n")
             }
             append("Connection: close\r\n\r\n")
         }

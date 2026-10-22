@@ -83,6 +83,8 @@ The compiled APK will be generated at `app/build/outputs/apk/debug/app-debug.apk
 - [x] On-device storage (`/sdcard/Projects`) and ARM64 shell (`/system/bin/sh`).
 - [x] Native Electron polyfill bridge (`WebAppInterface.kt`).
 - [x] Resolve Android asset decompression buffer truncation bug.
+- [x] Implement gRPC-Web binary framing (`frameGrpcWeb`) and trailers (`0x80` flag).
+- [x] Implement Web Audio Worklet processor (`audio_processor.js`).
 - [ ] Connect `LocalServer.kt` to Gemini API with trajectory streaming.
 - [ ] Implement Google Account OAuth Sign-In via Chrome Custom Tabs.
 

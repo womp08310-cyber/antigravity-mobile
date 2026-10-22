@@ -1,36 +1,52 @@
 # Antigravity Mobile: Troubleshooting & Bug Post-Mortems
 
-## Bug Report: The "Black Screen of Death"
+## Summary of Solved Bugs
 
-### Symptoms
-When `Antigravity-Mobile-v1.0.apk` is installed on an Android device:
-1. Application launches and requests All Files Access (`MANAGE_EXTERNAL_STORAGE`).
-2. After granting permission and returning to the app, the display is completely black.
-3. Relaunching the application does not fix the issue.
+| Bug | Symptoms | Root Cause | Resolution |
+| :--- | :--- | :--- | :--- |
+| **Bug 1: Asset Truncation** | Black screen on launch; JS syntax error | `AssetInputStream.available()` reported active decompression buffer (8 KB) instead of full file size | Stream assets using full byte read (`it.readBytes()`) |
+| **Bug 2: ConnectRPC Incomplete Envelope** | Stuck on loader; `ConnectError: [invalid_argument] protocol error: incomplete envelope` | Client uses `application/grpc-web+json`; server returned unframed JSON | Implemented `frameGrpcWeb` with 5-byte data headers & `0x80` gRPC trailer frames |
+| **Bug 3: AudioWorklet 404** | Error overlay; `Failed to load worklet module script: .../audio_processor.js` | Missing `audio_processor.js` asset for Web Audio voice transcription | Created `audio_processor.js` implementing `audio-streaming-processor` and `voice-mic-processor` |
+| **Bug 4: Missing Schema RPCs** | React crashes on undefined props | `GetLocalUserInfo` returned `{}` without required `homeDirUri` | Added mock responses for `GetLocalUserInfo`, `GetMendelFlags`, `GetUserStatus`, `ListProjects` |
 
 ---
 
-### Root Cause Analysis
+## Detailed Post-Mortems
 
-#### 1. Asset Streaming Truncation (`InputStream.available()`)
-* **Problem:** In [`LocalServer.kt`](../app/src/main/java/com/example/antigravity/server/LocalServer.kt), the asset streaming method originally queried `stream.available()` to calculate the `Content-Length` header.
-* **Mechanism:** In the Android runtime, assets packaged inside an APK are compressed. The `AssetInputStream.available()` implementation does not report total uncompressed file size; it reports only the number of bytes available in the active decompression buffer (typically `8192` bytes).
-* **Impact:** For `main.js` (which is `10,178,381` bytes / 10.1 MB), the server sent `Content-Length: 8192`. The Android WebView read the first 8 KB and closed the socket. The JavaScript engine failed with `SyntaxError: Unexpected end of input`, and React failed to mount.
-* **Fix:** Replaced buffer-based length calculation with `stream.use { it.readBytes() }`, providing the exact byte count in the header.
-
-#### 2. Startup RPC Dependency Failure (`GetLocalUserInfo`)
-* **Problem:** During the initialization sequence in `main.js`, `RJc()` executes:
-  ```javascript
-  let e = await a.lsClient.getLocalUserInfo({});
-  return { homeDirUri: Oe(e.homeDirUri), username: e.username };
+### Post-Mortem 1: ConnectRPC Framing Error (`incomplete envelope`)
+* **Symptom:**
+  ```text
+  ConnectError: [invalid_argument] protocol error: incomplete envelope
+  at Object.pull (http://127.0.0.1:40389/main.js:2344:238)
   ```
-* **Mechanism:** Our loopback server did not implement `GetLocalUserInfo`, returning an empty `{}` object. `e.homeDirUri` evaluated to `undefined`. `Oe(undefined)` threw an uncaught `TypeError: Cannot read properties of undefined`, causing the startup promise to reject before reaching `createRoot(root).render(...)`.
-* **Fix:** Added a comprehensive mock for `GetLocalUserInfo` returning `{"username": "mobile_developer", "homeDirUri": "file:///storage/emulated/0"}` alongside `GetUserStatus`, `HasAuthToken`, and `GetGrantedScopes`.
+* **Mechanism:** In Connect/gRPC-Web, each response must contain a 5-byte envelope header (`[flag][4-byte big-endian length]`). When raw JSON was sent, byte 0 (`{` = `0x7B` = `123`) was parsed as the flag, and the next 4 bytes (`"use`) were parsed as a 578 MB payload length. When the socket closed after 50 bytes, `Nxa.decode` detected leftover buffer bytes (`byteLength > 0`) and threw `incomplete envelope`.
+* **Fix:** Enforced `frameGrpcWeb()` for all `application/grpc-web+json` requests in `LocalServer.kt`:
+  ```kotlin
+  val trailer = "grpc-status: 0\r\ngrpc-message: OK\r\n".toByteArray(StandardCharsets.UTF_8)
+  val trailerFrame = ByteArray(5 + trailer.size).apply {
+      this[0] = 0x80.toByte() // 0x80 = Trailers flag in gRPC-web
+      this[1] = ((trailer.size shr 24) and 0xFF).toByte()
+      this[2] = ((trailer.size shr 16) and 0xFF).toByte()
+      this[3] = ((trailer.size shr 8) and 0xFF).toByte()
+      this[4] = (trailer.size and 0xFF).toByte()
+      System.arraycopy(trailer, 0, this, 5, trailer.size)
+  }
+  ```
 
-#### 3. Bridge Injection Race Condition
-* **Problem:** Injecting native bridge polyfills (`window.nativeStorage`, `window.electronNative`) asynchronously via `WebViewClient.onPageStarted()` introduced a race condition with script evaluation.
-* **Fix:** Embedded the polyfill directly as a synchronous inline script in `<head>` of `index.html`, guaranteeing all APIs are defined before `main.js` evaluates.
+---
 
-#### 4. Surface Background Contrast
-* **Problem:** The default web page style was `background-color: transparent`, which defaulted to black when the WebView was empty.
-* **Fix:** Explicitly set `#131313` background styling on `html`, `body`, and Android's `FrameLayout` and `WebView` to prevent visual flashes.
+### Post-Mortem 2: AudioWorklet 404 (`Failed to load worklet module script`)
+* **Symptom:**
+  ```text
+  Failed to load worklet module script:
+  http://127.0.0.1:40361/audio_processor.js?v=2.25.0 (HTTP status: 404)
+  ```
+* **Mechanism:** `main.js` boots the audio engine for voice inputs by requesting `c.audioWorklet.addModule('/audio_processor.js?v=2.25.0')`. Because this static asset was missing from the APK, the server returned 404, rejecting the promise and halting React execution.
+* **Fix:** Provided `app/src/main/assets/web/audio_processor.js` and added asset routing in `MainActivity.kt` and `LocalServer.kt`.
+
+---
+
+## State at Checkpoint
+* **Current Version:** `Antigravity-Mobile-v1.6.apk`
+* **Log Status:** Zero runtime errors (`hasError=false`, `hasRejection=false`).
+* **Next Action on Resume:** Wire Google OAuth sign-in and Gemini cascade streaming.
