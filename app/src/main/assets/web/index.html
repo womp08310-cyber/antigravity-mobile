@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+  <head>
+<script>
+window.__APP_CONFIG__ = {"productName":"antigravity","csrfToken":"34b556f6-f5bd-48d3-9d78-902ae3f98aac","appVersion":"2.25.0","releaseChannel":"stable","devMode":false};
+
+// Android Native Polyfills
+window.nativeStorage = {
+    getItems: function() {
+        try {
+            var json = window.AndroidBridge ? AndroidBridge.getStorageItems() : '{}';
+            return Promise.resolve(JSON.parse(json || '{}'));
+        } catch(e) {
+            return Promise.resolve({});
+        }
+    },
+    updateItems: function(changes) {
+        try {
+            if (window.AndroidBridge) AndroidBridge.updateStorageItems(JSON.stringify(changes || {}));
+            return Promise.resolve();
+        } catch(e) {
+            return Promise.resolve();
+        }
+    },
+    onChanged: function(cb) { return function() {}; }
+};
+window.electronNative = {
+    getZoomLevel: function() { return 1.0; },
+    getPathForFile: function(f) { return f ? f.path : undefined; },
+    setTitleBarOverlay: function() {},
+    minimize: function() {},
+    maximize: function() {},
+    unmaximize: function() {},
+    isMaximized: function() { return Promise.resolve(true); },
+    close: function() {},
+    toggleDevTools: function() {},
+    zoomIn: function() {},
+    zoomOut: function() {},
+    resetZoom: function() {},
+    openExternal: function(url) { if (window.AndroidBridge) AndroidBridge.openExternal(url); },
+    revealInFilePicker: function() {},
+    showContextMenu: function() {},
+    closeContextMenu: function() {}
+};
+window.dialog = {
+    showOpenDialog: function() { return Promise.resolve({ canceled: true, filePaths: [] }); },
+    showOpenMultipleFolderDialog: function() { return Promise.resolve({ canceled: true, filePaths: [] }); }
+};
+window.nativeNotifications = {
+    send: function() {},
+    openSystemPreferences: function() {},
+    onClicked: function() { return function() {}; }
+};
+window.deepLink = {
+    getStoredDeepLink: function() {
+        var link = window.AndroidBridge ? AndroidBridge.getStoredDeepLink() : null;
+        return Promise.resolve(link);
+    },
+    onDeepLink: function(cb) {
+        window.__deepLinkCb = cb;
+        return function() { window.__deepLinkCb = null; };
+    }
+};
+window.agent = {
+    updateActiveAgentCount: function(cnt) {
+        if (window.AndroidBridge) AndroidBridge.updateActiveAgentCount(cnt);
+        return Promise.resolve();
+    }
+};
+window.extensions = { sendAuthorities: function() { return Promise.resolve(); } };
+window.logs = { getElectronLogs: function() { return Promise.resolve(''); } };
+window.ide = { isInstalled: function() { return Promise.resolve(false); } };
+window.wsl = { getState: function() { return Promise.resolve(null); }, connect: function() { return Promise.resolve(false); } };
+window.electronUpdater = {
+    getState: function() { return Promise.resolve({ status: 'up-to-date' }); },
+    checkForUpdates: function() { return Promise.resolve(); },
+    onStateChanged: function() { return function() {}; }
+};
+</script>
+    <meta charset="UTF-8" />
+    <title>Antigravity</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0" />
+    <!-- Preconnect secondary CDNs for dynamic UI icons (Drive, Docs, Colab) -->
+    <link rel="preconnect" href="https://www.gstatic.com" />
+    <link rel="preconnect" href="https://ssl.gstatic.com" />
+    <!-- Preconnect to font origins for dynamic Google Symbols loading -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <script>
+      // Polyfill Node process global for third-party libraries (e.g. TanStack Virtual)
+      window.process = window.process || {};
+      window.process.env = window.process.env || {};
+      if (!window.process.env.NODE_ENV) {
+        window.process.env.NODE_ENV = window.__APP_CONFIG__?.devMode ? "development" : "production";
+      }
+      // Set process.platform from the user agent. This MUST happen here, before
+      // any bundle (and therefore vscode-uri) loads.
+      if (!window.process.platform) {
+        window.process.platform = "linux";
+      }
+
+      // Workaround for mce-autosize-textarea re-definition error from overlay_bundle.js.
+      if (window.customElements) {
+        const originalDefine = window.customElements.define;
+        window.customElements.define = (name, constructor, options) => {
+          if (!window.customElements.get(name)) {
+            originalDefine.call(window.customElements, name, constructor, options);
+          }
+        };
+      }
+    </script>
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎁</text></svg>"
+    />
+    <link rel="stylesheet" href="/jetbox.css" />
+    <link rel="stylesheet" href="/compiled_tailwind.css" />
+    <!-- Inline styles to prevent flash before app loads -->
+    <style>
+      html,
+      body {
+        height: 100%;
+        background-color: #131313;
+        color: #e5e7eb;
+        overscroll-behavior: none;
+      }
+    </style>
+    <script>
+      (() => {
+        let theme = new URLSearchParams(window.location.search).get("hostTheme") || "dark";
+        document.documentElement.style.colorScheme = theme;
+      })();
+    </script>
+  </head>
+  <body class="dark bg-[#131313] text-[#e5e7eb]">
+    <div id="root"></div>
+    <script defer src="/prism_bundle.js"></script>
+    <script src="/main.js"></script>
+  </body>
+</html>
